@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>XIAO BLE Control</title>
+<style>
+:root{--bg:#f4f5f7;--card:#fff;--fg:#1d2330;--muted:#6b7280;--on:#f59e0b;--off:#d1d5db;--ok:#10b981;--err:#ef4444;--ble:#2563eb}
+@media(prefers-color-scheme:dark){:root{--bg:#111318;--card:#1b1e25;--fg:#e8eaf0;--muted:#9aa1ad;--off:#3a3f4b;--ble:#60a5fa}}
+*{box-sizing:border-box}body{margin:0;font-family:system-ui,sans-serif;background:var(--bg);color:var(--fg)}
+main{max-width:520px;margin:0 auto;padding:24px 16px}h1{font-size:1.3rem;margin:0 0 4px}
+.sub{color:var(--muted);font-size:.85rem;margin-bottom:20px;display:flex;align-items:center;gap:8px}
+.pill{width:10px;height:10px;border-radius:50%;background:var(--off)}.pill.online{background:var(--ok)}.pill.offline{background:var(--err)}
+.card{background:var(--card);border-radius:14px;padding:20px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+.row{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.label{font-weight:600}.dot{width:56px;height:56px;border-radius:50%;background:var(--off);transition:.15s}
+.dot.on{background:var(--on);box-shadow:0 0 24px var(--on)}.dot.touch{background:var(--ok);box-shadow:0 0 24px var(--ok)}
+.btns{display:flex;gap:8px;margin-top:16px}button{flex:1;padding:12px;border:0;border-radius:10px;font-size:1rem;font-weight:600;cursor:pointer}
+button:disabled{opacity:.45;cursor:default}
+#connect{background:var(--ble);color:#fff;width:100%}#on{background:var(--on);color:#fff}#off{background:var(--off);color:var(--fg)}
+.val{color:var(--muted);font-size:.85rem;margin-top:8px}
+.bar{height:8px;border-radius:4px;background:var(--off);margin-top:12px;overflow:hidden}
+.bar i{display:block;height:100%;width:0;background:var(--ok);transition:width .15s}
+.note{color:var(--muted);font-size:.8rem;line-height:1.5}
+</style></head><body><main>
+<h1>XIAO ESP32-S3 BLE 제어</h1>
+<div class="sub"><span class="pill" id="pill"></span><span id="status">연결 안 됨</span></div>
+<div class="card"><button id="connect">보드 찾아서 연결</button>
+<p class="note" id="support" hidden>이 브라우저는 Web Bluetooth를 지원하지 않습니다. 안드로이드 크롬에서 열거나, nRF Connect 앱을 쓰세요.</p></div>
+<div class="card"><div class="row"><div><div class="label">LED</div><div class="val" id="ledText">-</div></div><div class="dot" id="ledDot"></div></div>
+<div class="btns"><button id="on" disabled>켜기</button><button id="off" disabled>끄기</button></div></div>
+<div class="card"><div class="row"><div><div class="label">터치 센서 (D0)</div><div class="val" id="touchText">-</div></div><div class="dot" id="touchDot"></div></div>
+<div class="bar"><i id="touchBar"></i></div><div class="val" id="touchVal"></div></div>
+<p class="note">보드 이름: XIAO-dlgmldyd · 블루투스와 위치 권한이 켜져 있어야 합니다.</p>
+</main><script>
+const SERVICE = '1e6096a0-6d84-4ac5-ab9a-a550a97a0f43';
+const LED = '1e6096a1-6d84-4ac5-ab9a-a550a97a0f43';
+const TOUCH = '1e6096a2-6d84-4ac5-ab9a-a550a97a0f43';
+const $ = id => document.getElementById(id);
+let device, ledChar;
+
+function setStatus(text, state) {
+  $('status').textContent = text;
+  $('pill').className = 'pill ' + (state || '');
+}
+function renderLed(on) {
+  $('ledDot').classList.toggle('on', on); $('ledText').textContent = on ? '켜짐' : '꺼짐';
+}
+function renderTouch(text) {
+  const [t, value, threshold] = text.split(',').map(Number);
+  $('touchDot').classList.toggle('touch', t === 1); $('touchText').textContent = t === 1 ? '터치됨' : '터치 안 됨';
+  $('touchVal').textContent = '값 ' + value + ' / 기준 ' + threshold;
+  $('touchBar').style.width = Math.min(100, value / threshold * 75) + '%';
+}
+function setControls(enabled) { $('on').disabled = $('off').disabled = !enabled; }
+
+async function connect() {
+  try {
+    setStatus('보드 찾는 중…');
+    device = await navigator.bluetooth.requestDevice({ filters: [{ services: [SERVICE] }] });
+    device.addEventListener('gattserverdisconnected', () => {
+      setStatus('연결 끊김 · 다시 연결을 누르세요', 'offline'); setControls(false);
+      $('connect').textContent = '다시 연결';
+    });
+    setStatus('연결 중…');
+    const server = await device.gatt.connect();
+    const service = await server.getPrimaryService(SERVICE);
+    ledChar = await service.getCharacteristic(LED);
+    const touchChar = await service.getCharacteristic(TOUCH);
+
+    renderLed((await ledChar.readValue()).getUint8(0) === 1);
+    await ledChar.startNotifications();
+    ledChar.addEventListener('characteristicvaluechanged', e => renderLed(e.target.value.getUint8(0) === 1));
+
+    const dec = new TextDecoder();
+    renderTouch(dec.decode(await touchChar.readValue()));
+    await touchChar.startNotifications();
+    touchChar.addEventListener('characteristicvaluechanged', e => renderTouch(dec.decode(e.target.value)));
+
+    setStatus('연결됨 · ' + device.name, 'online'); setControls(true);
+    $('connect').textContent = '연결됨';
+  } catch (e) {
+    setStatus(e.name === 'NotFoundError' ? '선택이 취소됐습니다' : '연결 실패: ' + e.message, 'offline');
+  }
+}
+
+async function setLed(on) {
+  if (!ledChar) return;
+  setControls(false);
+  try { await ledChar.writeValue(new Uint8Array([on ? 1 : 0])); renderLed(on); }
+  catch (e) { setStatus('전송 실패: ' + e.message, 'offline'); }
+  setControls(device && device.gatt.connected);
+}
+
+if (!navigator.bluetooth) { $('support').hidden = false; $('connect').disabled = true; }
+$('connect').onclick = () => { if (!(device && device.gatt.connected)) connect(); };
+$('on').onclick = () => setLed(true);
+$('off').onclick = () => setLed(false);
+</script></body></html>
