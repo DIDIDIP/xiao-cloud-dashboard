@@ -55,7 +55,10 @@ function setControls(enabled) { $('on').disabled = $('off').disabled = !enabled;
 async function connect() {
   try {
     setStatus('보드 찾는 중…');
-    device = await navigator.bluetooth.requestDevice({ filters: [{ services: [SERVICE] }] });
+    device = await navigator.bluetooth.requestDevice({
+      filters: [{ services: [SERVICE] }, { namePrefix: 'XIAO' }],
+      optionalServices: [SERVICE]
+    });
     device.addEventListener('gattserverdisconnected', () => {
       setStatus('연결 끊김 · 다시 연결을 누르세요', 'offline'); setControls(false);
       $('connect').textContent = '다시 연결';
@@ -78,7 +81,10 @@ async function connect() {
     setStatus('연결됨 · ' + device.name, 'online'); setControls(true);
     $('connect').textContent = '연결됨';
   } catch (e) {
-    setStatus(e.name === 'NotFoundError' ? '선택이 취소됐습니다' : '연결 실패: ' + e.message, 'offline');
+    const msg = e.name === 'NotFoundError' ? '보드를 고르지 않았거나 찾지 못했습니다'
+      : e.name === 'SecurityError' || e.name === 'NotAllowedError' ? '블루투스 권한이 없습니다 (크롬 권한 확인)'
+      : '연결 실패: ' + e.message;
+    setStatus(msg + ' [' + e.name + ']', 'offline');
   }
 }
 
