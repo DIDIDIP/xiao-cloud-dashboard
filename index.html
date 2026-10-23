@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>XIAO Cloud Dashboard</title>
+<style>
+:root{--bg:#f4f5f7;--card:#fff;--fg:#1d2330;--muted:#6b7280;--on:#f59e0b;--off:#d1d5db;--ok:#10b981;--err:#ef4444}
+@media(prefers-color-scheme:dark){:root{--bg:#111318;--card:#1b1e25;--fg:#e8eaf0;--muted:#9aa1ad;--off:#3a3f4b}}
+*{box-sizing:border-box}body{margin:0;font-family:system-ui,sans-serif;background:var(--bg);color:var(--fg)}
+main{max-width:520px;margin:0 auto;padding:24px 16px}h1{font-size:1.3rem;margin:0 0 4px}
+.sub{color:var(--muted);font-size:.85rem;margin-bottom:20px;display:flex;align-items:center;gap:8px}
+.pill{width:10px;height:10px;border-radius:50%;background:var(--off)}.pill.online{background:var(--ok)}.pill.offline{background:var(--err)}
+.card{background:var(--card);border-radius:14px;padding:20px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+.row{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.label{font-weight:600}.dot{width:56px;height:56px;border-radius:50%;background:var(--off);transition:.15s}
+.dot.on{background:var(--on);box-shadow:0 0 24px var(--on)}.dot.touch{background:var(--ok);box-shadow:0 0 24px var(--ok)}
+.btns{display:flex;gap:8px;margin-top:16px}button{flex:1;padding:12px;border:0;border-radius:10px;font-size:1rem;font-weight:600;cursor:pointer}
+button:disabled{opacity:.5;cursor:default}
+#on{background:var(--on);color:#fff}#off{background:var(--off);color:var(--fg)}
+.val{color:var(--muted);font-size:.85rem;margin-top:8px}
+</style></head><body><main>
+<h1>XIAO ESP32-S3 클라우드 대시보드</h1>
+<div class="sub"><span class="pill" id="pill"></span><span id="status">연결 중…</span></div>
+<div class="card"><div class="row"><div><div class="label">LED</div><div class="val" id="ledText">-</div></div><div class="dot" id="ledDot"></div></div>
+<div class="btns"><button id="on">켜기</button><button id="off">끄기</button></div></div>
+<div class="card"><div class="row"><div><div class="label">터치 센서 (D0)</div><div class="val" id="touchText">-</div></div><div class="dot" id="touchDot"></div></div>
+<div class="val" id="touchVal"></div></div>
+</main>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script>
+const SUPABASE_URL = 'https://baysfhlpymetxbyienrb.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_2gWJc1gEPnAPrCUC0Oc8tw_wrzxncK-';
+const DEVICE_ID = 'xiao-01';
+const OFFLINE_AFTER_MS = 5000;
+
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+const $ = id => document.getElementById(id);
+let state = null;
+
+function render(s) {
+  state = s;
+  $('ledDot').classList.toggle('on', s.led); $('ledText').textContent = s.led ? '켜짐' : '꺼짐';
+  $('touchDot').classList.toggle('touch', s.touched); $('touchText').textContent = s.touched ? '터치됨' : '터치 안 됨';
+  $('touchVal').textContent = '값 ' + s.touch_value + ' / 기준 ' + s.threshold;
+  renderOnline();
+}
+
+function renderOnline() {
+  if (!state) return;
+  const seen = state.last_seen ? new Date(state.last_seen) : null;
+  const online = seen && Date.now() - seen.getTime() < OFFLINE_AFTER_MS;
+  $('pill').className = 'pill ' + (online ? 'online' : 'offline');
+  $('status').textContent = online
+    ? '보드 온라인 · ' + DEVICE_ID
+    : '보드 오프라인' + (seen ? ' · 마지막 응답 ' + seen.toLocaleTimeString() : '');
+}
+
+async function load() {
+  const { data, error } = await sb.from('device_state').select('*').eq('id', DEVICE_ID).single();
+  if (error) { $('status').textContent = '불러오기 실패: ' + error.message; return; }
+  render(data);
+}
+
+async function setLed(on) {
+  $('on').disabled = $('off').disabled = true;
+  const { data, error } = await sb.rpc('set_led', { p_id: DEVICE_ID, p_on: on });
+  if (!error && data) render(data);
+  $('on').disabled = $('off').disabled = false;
+}
+
+$('on').onclick = () => setLed(true);
+$('off').onclick = () => setLed(false);
+
+sb.channel('device-' + DEVICE_ID)
+  .on('postgres_changes',
+      { event: 'UPDATE', schema: 'public', table: 'device_state', filter: 'id=eq.' + DEVICE_ID },
+      payload => render(payload.new))
+  .subscribe(status => { if (status === 'SUBSCRIBED') load(); });
+
+load();
+setInterval(renderOnline, 1000);
+</script></body></html>
